@@ -1,5 +1,5 @@
 import { WorkspaceRequiredError } from "@yarnpkg/cli";
-import {CommandContext, Plugin, Configuration, Project, Cache, ThrowReport, LocatorHash, miscUtils, structUtils} from '@yarnpkg/core';
+import {CommandContext, Plugin, Configuration, Project, Cache, ThrowReport, LocatorHash, miscUtils, structUtils, Locator } from '@yarnpkg/core';
 import {Command} from 'clipanion';
 
 class RelockCommand extends Command<CommandContext> {
@@ -38,11 +38,36 @@ class RelockCommand extends Command<CommandContext> {
             },
           ])
         )
-      ).filter(lh => !project.storedChecksums.has(lh));
+      ).filter(locatorHash => {
+        if (project.storedChecksums.has(locatorHash)) {
+          return false;
+        }
+        let pkg = project.storedPackages.get(locatorHash) as Locator;
+        if (pkg.reference.includes('workspace:')) {
+          return false;
+        }
+        if (pkg.reference.startsWith('virtual')) {
+          const nextReference = pkg.reference.slice(pkg.reference.indexOf('#') + 1)
+          pkg = structUtils.makeLocator(pkg, nextReference)
+        }
+        return !project.storedChecksums.has(pkg.locatorHash)
+      });
+      const fetcher = configuration.makeFetcher();
+      const fetchWithRetry = async (pkg: Locator, checksums: Map<LocatorHash, string>, isRetry?: boolean) => {
+        const result = await fetcher.fetch(pkg, {checksums, project, cache, fetcher, report: new ThrowReport()});
+        if (result.checksum || isRetry) {
+          return result
+        }
+        await new Promise((resolve) => setTimeout(resolve, 500))
+        return await fetchWithRetry(pkg, checksums, true)
+      }
       for (const locatorHash of missingChecksumLocators) {
-        const pkg = project.storedPackages.get(locatorHash);
-        const fetcher = configuration.makeFetcher();
-        const result = await fetcher.fetch(pkg, {checksums: project.storedChecksums, project, cache, fetcher, report: new ThrowReport()});
+        let pkg = project.storedPackages.get(locatorHash) as Locator;
+        if (pkg.reference.startsWith('virtual')) {
+          const nextReference = pkg.reference.slice(pkg.reference.indexOf('#') + 1)
+          pkg = structUtils.makeLocator(pkg, nextReference)
+        }
+        const result = await fetchWithRetry(pkg, project.storedChecksums);
         if (result.checksum) {
           project.storedChecksums.set(pkg.locatorHash, result.checksum);
         }
