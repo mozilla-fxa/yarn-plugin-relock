@@ -1,10 +1,10 @@
 import { WorkspaceRequiredError } from "@yarnpkg/cli";
-import {CommandContext, Plugin, Configuration, Project, Cache, ThrowReport, LocatorHash, miscUtils, structUtils, Locator } from '@yarnpkg/core';
+import {CommandContext, Plugin, Configuration, Project, Cache, ThrowReport, LocatorHash, miscUtils, structUtils, Locator, Package } from '@yarnpkg/core';
 import {Command} from 'clipanion';
 
 class RelockCommand extends Command<CommandContext> {
 
-  @Command.Path(`relock`)
+  static paths = [['relock']]
   async execute() {
     const configuration = await Configuration.find(
       this.context.cwd,
@@ -31,9 +31,9 @@ class RelockCommand extends Command<CommandContext> {
           miscUtils.sortMap(project.storedResolutions.values(), [
             (locatorHash: LocatorHash) => {
               const pkg = project.storedPackages.get(locatorHash);
-              if (!pkg)
+              if (!pkg) {
                 throw new Error(`Assertion failed: The locator should have been registered`);
-
+              }
               return structUtils.stringifyLocator(pkg);
             },
           ])
@@ -42,13 +42,18 @@ class RelockCommand extends Command<CommandContext> {
         if (project.storedChecksums.has(locatorHash)) {
           return false;
         }
-        let pkg = project.storedPackages.get(locatorHash) as Locator;
+        let pkg = project.storedPackages.get(locatorHash);
+        if (pkg.conditions) {
+          // skip checksums for deps with conditions
+          return false;
+        }
         if (pkg.reference.includes('workspace:')) {
           return false;
         }
+        
         if (pkg.reference.startsWith('virtual')) {
           const nextReference = pkg.reference.slice(pkg.reference.indexOf('#') + 1)
-          pkg = structUtils.makeLocator(pkg, nextReference)
+          pkg = structUtils.makeLocator(pkg, nextReference) as Package
         }
         return !project.storedChecksums.has(pkg.locatorHash)
       });
@@ -74,7 +79,7 @@ class RelockCommand extends Command<CommandContext> {
       }
     }
     catch (e) {}
-
+    //@ts-ignore
     await project.persistLockfile()
   }
 }
